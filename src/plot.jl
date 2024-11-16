@@ -2753,9 +2753,9 @@ end
     end
 end
 
-#= ================ =#
-#  generic plotting  #
-#= ================ =#
+#= ================ ====================#
+#  Helper functions (IDS_Field_Finder)  #
+#= ================ ====================#
 
 struct IDS_Field_Finder
     root_ids::Union{IDS,IDSvector} # Start point of the search
@@ -2789,11 +2789,11 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder)
 
     rest_part = replace(parent_name, root_name => "")
 
-    printstyled(io, root_name; color=:blue)
+    printstyled(io, root_name; color=:red)
     if IFF.root_ids isa IMASdd.dd
         print(io, ".")
     end
-    print(io, rest_part * ".")
+    isempty(rest_part) ? nothing : print(io, rest_part * ".")
 
     printstyled(io, String(IFF.field); color=:green, bold=true)
 
@@ -2804,17 +2804,18 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder)
     value = IFF.value
     print(io, " [$(Base.summary(value))]")
 
-    if typeof(value) <: Union{AbstractArray,Real} && length(value) > 0
+    if typeof(value) <: Union{AbstractArray{<:Real},Real} && length(value) > 0
+        color = :blue
         print(io, " (")
         if sum(abs, value .- value[1]) == 0.0
-            print(io, "all:")
+            printstyled(io, "all:"; color)
             print(io, @sprintf("%.3g", value[1]))
         else
-            print(io, "min:")
+            printstyled(io, "min:"; color)
             print(io, @sprintf("%.3g, ", minimum(value)))
-            print(io, "avg:")
+            printstyled(io, "avg:"; color)
             print(io, @sprintf("%.3g, ", sum(value) / length(value)))
-            print(io, "max:")
+            printstyled(io, "max:"; color)
             print(io, @sprintf("%.3g", maximum(value)))
         end
         print(io, ")")
@@ -2825,7 +2826,7 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder)
             half_len = div(max_length - 5, 2)
             value = value[1:half_len] * " ... " * value[end-half_len+1:end]
         end
-        printstyled(io,"\""*value*"\"", color=:red)
+        printstyled(io, "\"" * value * "\""; color=:red)
         print(io, ")")
     end
 end
@@ -2861,33 +2862,47 @@ IFF = IMAS.find_valid_ids_fields(dd.equilibrium, :psi)
 IFF_list = find_valid_ids_fields([dd.core_profiles, dd.equilibrium], [:q, :volume, :psi_norm])
 ```
 """
-function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symbol,AbstractArray{Symbol},Regex}=r""
-    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
+function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symbol,AbstractArray{Symbol},Regex}=r""; include_subfields::Bool=true)
 
     IFF_arr = Vector{IDS_Field_Finder}()
 
     for ids in ids_arr
         if ids isa Union{IDS,IDSvector}
-            root_ids = ids
-            if target_fields isa Union{Symbol,AbstractArray{Symbol}}
-                append!(IFF_arr, find_valid_ids_fields(ids, target_fields; prefix, recursive, root_ids))
-            elseif target_fields isa Regex
-                append!(IFF_arr, find_valid_ids_fields(ids, target_fields))
-            end
+            append!(IFF_arr, find_valid_ids_fields(ids, target_fields; include_subfields))
         end
     end
 
     return IFF_arr
 end
 
-function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Symbol,AbstractArray{Symbol},Regex})
+function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Symbol,AbstractArray{Symbol},Regex}=r""; include_subfields::Bool=true)
     IFF_list = Vector{IDS_Field_Finder}()
 
-    flag_save = false
+    flag_found = false
     stack = Vector{Tuple{Union{IDS,IDSvector,Vector{IDS}},String}}()  # Stack initialization
     sizehint!(stack, 1000)
 
-    push!(stack, (root_ids, location(root_ids)))
+    if root_ids isa IDSvector
+        parent_ids = (root_ids._parent).value
+        push!(stack, (parent_ids, location(parent_ids)))
+    else
+        push!(stack, (root_ids, location(root_ids)))
+    end
+
+    # helper function
+    function is_valid_target_found(ids::Union{IDS,IDSvector}, field::Symbol, path::String, target::Union{Symbol,AbstractArray{Symbol},Regex})
+        if !ismissing(ids, field)
+            if target isa Regex
+                return occursin(target, path) ? true : false
+            elseif target isa Symbol
+                return (field == target) ? true : false
+            elseif target isa AbstractArray{Symbol}
+                return (field in target) ? true : false
+            end
+        else
+            return false
+        end
+    end
 
     while !isempty(stack)
         ids, path = pop!(stack)
@@ -2902,36 +2917,32 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
             if typeof(child) <: Union{IDSvector,Vector{IDS}}
                 for (k, grand_child) in pairs(child)
                     new_path = path * "." * String(field) * "[$k]"
-                    push!(stack, (grand_child, new_path))
+                    flag_found = is_valid_target_found(ids, field, new_path, target)
+                    if include_subfields || !flag_found
+                        push!(stack, (grand_child, new_path))
+                    end
                 end
             elseif typeof(child) <: IDS
                 new_path = path * "." * String(field)
-                push!(stack, (child, new_path))
+                flag_found = is_valid_target_found(ids, field, new_path, target)
+                if include_subfields || !flag_found
+                    push!(stack, (child, new_path))
+                end
             else
                 new_path = path * "." * String(field)
+                flag_found = is_valid_target_found(ids, field, new_path, target)
+            end
 
-                if !ismissing(ids, field)
-                    if target isa Regex
-                        flag_save = occursin(target, new_path) ? true : false
-                    elseif target isa Symbol
-                        flag_save = (field == target) ? true : false
-                    elseif target isa AbstractArray{Symbol}
-                        flag_save = (field in target) ? true : false
-                    end
-                end
-
-                if flag_save
-                    # Save the found result
-                    push!(IFF_list,
-                        IDS_Field_Finder(;
-                            parent_ids=ids,
-                            root_ids=root_ids,
-                            field=field,
-                            field_type=fieldtype(typeof(ids), field),
-                            field_path=new_path)
-                    )
-                    flag_save = false
-                end
+            if flag_found
+                push!(IFF_list,
+                    IDS_Field_Finder(;
+                        parent_ids=ids,
+                        root_ids=root_ids,
+                        field=field,
+                        field_type=fieldtype(typeof(ids), field),
+                        field_path=new_path)
+                )
+                flag_found = false
             end
         end
     end
@@ -2940,6 +2951,10 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
     # reverse the IFF_list to make it is in the order of given input
     return reverse!(IFF_list)
 end
+
+#= ================ =#
+#  generic plotting  #
+#= ================ =#
 
 using Plots.PlotMeasures
 
@@ -2954,7 +2969,7 @@ end
 @recipe function plot_IFF_list(IFF_list::AbstractArray{IDS_Field_Finder}, scale_factor::Real=1.0; ncols=nothing)
 
     # Keep only non-empty array type data (e.g., scalars are excluded)
-    IFF_list = filter(IFF -> IFF.field_type <: AbstractArray, IFF_list)
+    IFF_list = filter(IFF -> IFF.field_type <: AbstractArray{<:Real}, IFF_list)
     IFF_list = filter(IFF -> length(IFF.value) > 0, IFF_list)
 
     # At least one valid filed name is required to proceed
@@ -2963,18 +2978,18 @@ end
     my_layout = get(plotattributes, :layout, length(IFF_list))
     layout --> my_layout
 
-    my_basic_size = get(plotattributes, :size, (600,400))
+    my_basic_size = get(plotattributes, :size, (600, 400))
 
 
     basic_width, basic_height = my_basic_size
     # basic_width, basic_height = (480, 320)
     # basic_width, basic_height = (360, 240)
     scaled_width, scaled_height = basic_width, basic_height
-    if typeof(my_layout)<:Int
-        scaled_width, scaled_height  = sqrt(my_layout).*(basic_width, basic_height)
-    elseif typeof(my_layout)<:Tuple{Int,Int}
-        scaled_width = my_layout[2]*basic_width
-        scaled_height = my_layout[1]*basic_height
+    if typeof(my_layout) <: Int
+        scaled_width, scaled_height = sqrt(my_layout) .* (basic_width, basic_height)
+    elseif typeof(my_layout) <: Tuple{Int,Int}
+        scaled_width = my_layout[2] * basic_width
+        scaled_height = my_layout[1] * basic_height
     end
 
     scaled_width = floor(Int, scaled_width * scale_factor)
