@@ -2963,8 +2963,11 @@ end
     my_layout = get(plotattributes, :layout, length(IFF_list))
     layout --> my_layout
 
-    # basic_width, basic_height = (600, 400)
-    basic_width, basic_height = (480, 320)
+    my_basic_size = get(plotattributes, :size, (600,400))
+
+
+    basic_width, basic_height = my_basic_size
+    # basic_width, basic_height = (480, 320)
     # basic_width, basic_height = (360, 240)
     scaled_width, scaled_height = basic_width, basic_height
     if typeof(my_layout)<:Int
@@ -2977,7 +2980,7 @@ end
     scaled_width = floor(Int, scaled_width * scale_factor)
     scaled_height = floor(Int, scaled_height * scale_factor)
 
-    size --> (scaled_width, scaled_height)
+    size := (scaled_width, scaled_height)
 
     legend_position --> :best
     left_margin --> [10mm 10mm]
