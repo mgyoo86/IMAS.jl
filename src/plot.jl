@@ -2776,14 +2776,14 @@ function Base.getproperty(instance::IDS_Field_Finder, prop::Symbol)
     end
 end
 
-function Base.show(io::IO, ::MIME"text/plain", IFF_list::AbstractArray{IDS_Field_Finder}, flag_statistics::Bool=true)
+function Base.show(io::IO, ::MIME"text/plain", IFF_list::AbstractArray{IDS_Field_Finder})
     for IFF in IFF_list
-        show(io, MIME"text/plain"(), IFF, flag_statistics)
+        show(io, MIME"text/plain"(), IFF)
         print(io, "\n")
     end
 end
 
-function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder, flag_statistics::Bool=true)
+function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder)
     root_name = IMAS.location(IFF.root_ids)
     parent_name = IMAS.location(IFF.parent_ids)
 
@@ -2804,7 +2804,7 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder, flag_stati
     value = IFF.value
     print(io, " [$(Base.summary(value))]")
 
-    if flag_statistics && typeof(value) <: AbstractArray && length(value) > 0
+    if typeof(value) <: Union{AbstractArray,Real} && length(value) > 0
         print(io, " (")
         if sum(abs, value .- value[1]) == 0.0
             print(io, "all:")
@@ -2817,6 +2817,15 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder, flag_stati
             print(io, "max:")
             print(io, @sprintf("%.3g", maximum(value)))
         end
+        print(io, ")")
+    elseif value isa String
+        print(io, " (")
+        max_length = 20
+        if length(value) > max_length
+            half_len = div(max_length - 5, 2)
+            value = value[1:half_len] * " ... " * value[end-half_len+1:end]
+        end
+        printstyled(io,"\""*value*"\"", color=:red)
         print(io, ")")
     end
 end
