@@ -2934,16 +2934,11 @@ end
 
 using Plots.PlotMeasures
 
-@recipe function plot_multiple_fields(ids::Union{IDS,IDSvector}, target_fields::AbstractArray{Symbol}=[:all]; recursive=true, scale_factor=1.0)
-
-    if target_fields == [:all]
-        recursive = true
-    end
+@recipe function plot_multiple_fields(ids::Union{IDS,IDSvector}, target_fields::Union{AbstractArray{Symbol},Regex}=r""; scale_factor=1.0)
 
     @series begin
-        # find valid field names (with recursive flag)
         # calls "plot_ids_named_tuple_list" recipe
-        IFF_list = find_valid_ids_fields(ids, target_fields; recursive)
+        IFF_list = find_valid_ids_fields(ids, target_fields)
     end
 end
 
@@ -2956,12 +2951,22 @@ end
     # At least one valid filed name is required to proceed
     @assert length(IFF_list) > 0 "All field names are invalid or missing"
 
-    layout --> length(IFF_list)
+    my_layout = get(plotattributes, :layout, length(IFF_list))
+    layout --> my_layout
 
-    basic_width, basic_height = sqrt(length(IFF_list)) .* (600, 400)
+    # basic_width, basic_height = (600, 400)
+    basic_width, basic_height = (480, 320)
+    # basic_width, basic_height = (360, 240)
+    scaled_width, scaled_height = basic_width, basic_height
+    if typeof(my_layout)<:Int
+        scaled_width, scaled_height  = sqrt(my_layout).*(basic_width, basic_height)
+    elseif typeof(my_layout)<:Tuple{Int,Int}
+        scaled_width = my_layout[2]*basic_width
+        scaled_height = my_layout[1]*basic_height
+    end
 
-    scaled_width = floor(Int, basic_width * scale_factor)
-    scaled_height = floor(Int, basic_height * scale_factor)
+    scaled_width = floor(Int, scaled_width * scale_factor)
+    scaled_height = floor(Int, scaled_height * scale_factor)
 
     size --> (scaled_width, scaled_height)
 
@@ -2979,18 +2984,19 @@ end
     end
 end
 
+ids_abbreviations = Dict(
+    "dd." => "",
+    "equilibrium" => "eq",
+    "time_slice" => "time_sc",
+    "profiles" => "prof",
+    "source" => "src",
+    "parallel" => "para"
+)
 
 # Function to shorten names directly in the original text
-function shorten_ids_name(full_name::String)
-    # Define abbreviation dictionary
-    ids_abbreviations = Dict(
-        "equilibrium" => "eq",
-        "time_slice" => "time_sc",
-        "profiles" => "prof"
-    )
-
+function shorten_ids_name(full_name::String, abbreviations::Dict=ids_abbreviations)
     # Apply each abbreviation to the full name
-    for (key, value) in ids_abbreviations
+    for (key, value) in abbreviations
         full_name = replace(full_name, key => value)
     end
     return full_name
