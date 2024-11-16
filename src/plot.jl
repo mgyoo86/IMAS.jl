@@ -2756,6 +2756,203 @@ end
 #= ================ =#
 #  generic plotting  #
 #= ================ =#
+
+struct IDS_Field_Finder
+    root_ids::Union{IDS,IDSvector} # Start point of the search
+    parent_ids::Union{IDS,IDSvector} # Parent IDS of target field
+    field::Symbol # Target field symbol
+    field_type::Type # Type of the field
+    relative_field_path::String # Relative path from root_ids to the field
+
+    # Named constructor with keyword arguments for clear field assignment
+    IDS_Field_Finder(; root_ids, parent_ids, field, field_type, relative_field_path) =
+        new(root_ids, parent_ids, field, field_type, relative_field_path)
+end
+function Base.getproperty(instance::IDS_Field_Finder, prop::Symbol)
+    if prop == :value
+        return getfield(instance.parent_ids, instance.field)  # Lazily evaluate `value`
+    else
+        return getfield(instance, prop)  # Default behavior for other fields
+    end
+end
+
+function Base.show(io::IO, ::MIME"text/plain", IFF_list::AbstractArray{IDS_Field_Finder}, flag_statistics::Bool=true)
+    for IFF in IFF_list
+        show(io, MIME"text/plain"(), IFF, flag_statistics)
+        print(io, "\n")
+    end
+end
+
+function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder, flag_statistics::Bool=true)
+    root_name = IMAS.location(IFF.root_ids)
+    parent_name = IMAS.location(IFF.parent_ids)
+
+    rest_part = replace(parent_name, root_name => "")
+
+    printstyled(io, root_name; color=:blue)
+    print(io, rest_part * ".")
+
+    printstyled(io, String(IFF.field); color=:green, bold=true)
+
+    unit = IMAS.units(IFF.parent_ids, IFF.field)
+    if !(isempty(unit) || unit == "-")
+        printstyled(io, " [$unit]"; color=:yellow, bold=true)
+    end
+    value = IFF.value
+    print(io, " [$(Base.summary(value))]")
+
+    if flag_statistics && typeof(value) <: AbstractArray && length(value) > 0
+        print(io, " (")
+        if sum(abs, value .- value[1]) == 0.0
+            print(io, "all:")
+            print(io, @sprintf("%.3g", value[1]))
+        else
+            print(io, "min:")
+            print(io, @sprintf("%.3g, ", minimum(value)))
+            print(io, "avg:")
+            print(io, @sprintf("%.3g, ", sum(value) / length(value)))
+            print(io, "max:")
+            print(io, @sprintf("%.3g", maximum(value)))
+        end
+        print(io, ")")
+    end
+end
+
+"""
+The `find_valid_ids_fields` function recursively extracts valid field information from an `IMAS.IDS` or `IMAS.IDSvector` object. It returns a vector of `IDS_Field_Finder` structures, each containing essential information about valid fields, including the field's name, its symbol, a reference to its parent `ids` object, and the relative path from the search root.
+
+## Arguments
+
+  - `ids::Union{IDS, IDSvector}`: The `IDS` or `IDSvector` object to analyze for valid fields.
+  - `target_fields::Union{Symbol, AbstractArray{Symbol}} = [:all]`: A symbol or array of symbols representing the target fields to retrieve. If set to `[:all]`, all available fields in `ids` are considered.
+  - `prefix::String = ""`: A string prefix that is appended to each field name, primarily used to retain the full path of nested fields during recursive calls.
+  - `recursive::Bool = true`: A boolean flag indicating whether to recursively search nested fields within `ids`. If `false`, only the specified `target_fields` at the top level of `ids` are retrieved.
+  - `root_ids::Union{IDS, IDSvector, Nothing} = nothing`: The starting point or root of the recursive search. Defaults to `ids` if not specified.
+
+## Returns
+
+  - `Vector{IDS_Field_Finder}`: A vector of `IDS_Field_Finder` structures, where each structure contains:
+
+      + `root_ids::Union{IDS, IDSvector}`: The root of the search for this field.
+      + `parent_ids::Union{IDS, IDSvector}`: A reference to the parent `ids` object containing the field.
+      + `field::Symbol`: The symbol of the field.
+      + `field_type::Type`: The type of the field.
+      + `relative_field_path::String`: The relative path from `root_ids` to the field, providing a hierarchical location of the field within the IDS structure.
+
+## Example
+
+```julia
+# Example of using one IDS instance with recursive field extraction
+IFF = IMAS.find_valid_ids_fields(dd.equilibrium, :psi)
+
+# Retrieve field information for specified fields within multiple IMAS IDS structures
+IFF_list = find_valid_ids_fields([dd.core_profiles, dd.equilibrium], [:q, :volume, :psi_norm])
+```
+"""
+function find_valid_ids_fields(ids::Union{IDS,IDSvector}, target_fields::Union{Symbol,AbstractArray{Symbol}}=[:all]
+    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
+
+    IFF_list = Vector{IDS_Field_Finder}()
+    root_ids = isnothing(root_ids) ? ids : root_ids
+
+    if target_fields == [:all]
+        recursive = true
+    end
+
+    if ids isa IDSvector
+        if recursive
+            for (k, child_ids) in pairs(ids)
+                if isempty(child_ids)
+                    continue
+                end
+                tmp_list = find_valid_ids_fields(child_ids, target_fields; prefix=String("$prefix[$k]"), recursive, root_ids)
+                append!(IFF_list, tmp_list)
+            end
+        end
+        return IFF_list
+    end
+
+    # prepare target_fields
+    target_fields = (target_fields isa Symbol) ? [target_fields] : target_fields
+    if target_fields == [:all]
+        target_fields = fieldnames(typeof(ids))
+    end
+
+    # filtering out invalid fields
+    target_fields = filter(x -> x ∉ IMAS.private_fields, target_fields)
+
+    child_ids_symbols = filter(x -> fieldtype(typeof(ids), x) <: Union{IDS,IDSvector}, fieldnames(typeof(ids)))
+
+    for field in target_fields
+        if hasfield(typeof(ids), field)
+            field_value = getfield(ids, field)
+
+            isempty(field_value) ? continue : nothing
+
+            field_name = String(field)
+
+            if typeof(field_value) <: Union{IDS,IDSvector}
+                # recursive call to get nested fields
+                if recursive
+                    new_prefix = prefix * "." * field_name
+                    tmp_list = find_valid_ids_fields(field_value; prefix=new_prefix, recursive, root_ids)
+                    append!(IFF_list, tmp_list)
+                end
+            else
+                if !ismissing(ids, field)
+                    push!(IFF_list,
+                        IDS_Field_Finder(;
+                            parent_ids=ids,
+                            root_ids=root_ids,
+                            field=field,
+                            field_type=fieldtype(typeof(ids), field),
+                            relative_field_path=prefix * "." * string(field_name)
+                            # relative_field_path=(prefix == "") ? field_name : prefix * "." * field_name
+                        )
+                    )
+                end
+            end
+        else
+            if recursive
+                # try to find field recursively
+                for child_symbol in child_ids_symbols
+                    child_ids = getfield(ids, child_symbol)
+
+                    isempty(child_ids) ? continue : nothing
+
+                    new_prefix = prefix * "." * String(child_symbol)
+                    tmp_nt_list = find_valid_ids_fields(child_ids, field; prefix=new_prefix, recursive, root_ids)
+                    append!(IFF_list, tmp_nt_list)
+                end
+            end
+        end
+    end
+    return IFF_list
+end
+
+function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symbol,AbstractArray{Symbol}}=[:all]
+    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
+
+    IFF_arr = Vector{IDS_Field_Finder}()
+
+    for ids in ids_arr
+        if ids isa Union{IDS,IDSvector}
+            root_ids = ids
+            append!(IFF_arr, find_valid_ids_fields(ids, target_fields; prefix, recursive, root_ids))
+        end
+    end
+
+    return IFF_arr
+end
+
+
+            end
+        end
+    end
+    return nt_list
+end
+
+
 @recipe function plot_field(ids::IMAS.IDS, field::Symbol; normalization=1.0, coordinate=nothing, weighted=nothing, fill0=false)
     id = plot_help_id(ids, field)
     @assert hasfield(typeof(ids), field) "$(location(ids)) does not have field `$field`. Did you mean: $(keys(ids))"
