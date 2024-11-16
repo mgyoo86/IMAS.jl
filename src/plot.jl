@@ -2871,90 +2871,12 @@ function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symb
     return IFF_arr
 end
 
-function find_valid_ids_fields(ids::Union{IDS,IDSvector}, target_fields::Union{Symbol,AbstractArray{Symbol}}=[:all]
-    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
-
-    IFF_list = Vector{IDS_Field_Finder}()
-    root_ids = isnothing(root_ids) ? ids : root_ids
-
-    if target_fields == [:all]
-        recursive = true
-    end
-
-    if ids isa IDSvector
-        if recursive
-            for (k, child_ids) in pairs(ids)
-                if isempty(child_ids)
-                    continue
-                end
-                tmp_list = find_valid_ids_fields(child_ids, target_fields; prefix=String("$prefix[$k]"), recursive, root_ids)
-                append!(IFF_list, tmp_list)
-            end
-        end
-        return IFF_list
-    end
-
-    # prepare target_fields
-    target_fields = (target_fields isa Symbol) ? [target_fields] : target_fields
-    if target_fields == [:all]
-        target_fields = fieldnames(typeof(ids))
-    end
-
-    # filtering out invalid fields
-    target_fields = filter(x -> x ∉ IMAS.private_fields, target_fields)
-
-    child_ids_symbols = filter(x -> fieldtype(typeof(ids), x) <: Union{IDS,IDSvector}, fieldnames(typeof(ids)))
-
-    for field in target_fields
-        if hasfield(typeof(ids), field)
-            field_value = getfield(ids, field)
-
-            isempty(field_value) ? continue : nothing
-
-            field_name = String(field)
-
-            if typeof(field_value) <: Union{IDS,IDSvector}
-                # recursive call to get nested fields
-                if recursive
-                    new_prefix = prefix * "." * field_name
-                    tmp_list = find_valid_ids_fields(field_value; prefix=new_prefix, recursive, root_ids)
-                    append!(IFF_list, tmp_list)
-                end
-            else
-                if !ismissing(ids, field)
-                    push!(IFF_list,
-                        IDS_Field_Finder(;
-                            parent_ids=ids,
-                            root_ids=root_ids,
-                            field=field,
-                            field_type=fieldtype(typeof(ids), field),
-                            field_path=location(ids) * "." * string(field_name)
-                        )
-                    )
-                end
-            end
-        else
-            if recursive
-                # try to find field recursively
-                for child_symbol in child_ids_symbols
-                    child_ids = getfield(ids, child_symbol)
-
-                    isempty(child_ids) ? continue : nothing
-
-                    new_prefix = prefix * "." * String(child_symbol)
-                    tmp_nt_list = find_valid_ids_fields(child_ids, field; prefix=new_prefix, recursive, root_ids)
-                    append!(IFF_list, tmp_nt_list)
-                end
-            end
-        end
-    end
-    return IFF_list
-end
-
-function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target_pattern::Regex)
+function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Symbol,AbstractArray{Symbol},Regex})
     IFF_list = Vector{IDS_Field_Finder}()
 
+    flag_save = false
     stack = Vector{Union{IDS,IDSvector,Vector{IDS}}}()  # Stack initialization
+    sizehint!(stack, 1000)
 
     push!(stack, root_ids)
 
@@ -2977,7 +2899,17 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target_pattern::R
             else
                 path = IMAS.location(ids)*"."*String(field)
 
-                if occursin(target_pattern, path) && !ismissing(ids, field)
+                if !ismissing(ids, field)
+                    if target isa Regex
+                        flag_save = occursin(target, path) ? true : false
+                    elseif target isa Symbol
+                        flag_save = (field==target) ? true : false
+                    elseif target isa AbstractArray{Symbol}
+                        flag_save = (field in target) ? true : false
+                    end
+                end
+
+                if flag_save
                     # Save the found result
                     push!(IFF_list,
                         IDS_Field_Finder(;
@@ -2987,6 +2919,7 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target_pattern::R
                         field_type=fieldtype(typeof(ids), field),
                         field_path=path)
                     )
+                    flag_save = false
                 end
             end
         end
@@ -3065,7 +2998,7 @@ end
 
 @recipe function plot_IFF(IFF::IDS_Field_Finder)
 
-    filed_name = shorten_ids_name(location(IFF.root_ids) * IFF.relative_field_path)
+    filed_name = shorten_ids_name(IFF.field_path)
 
     if IFF.field_type <: AbstractVector && length(IFF.value) > 0
 
