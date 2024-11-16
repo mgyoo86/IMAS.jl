@@ -2946,6 +2946,22 @@ function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symb
 end
 
 
+# Function to shorten names directly in the original text
+function shorten_ids_name(full_name::String)
+    # Define abbreviation dictionary
+    ids_abbreviations = Dict(
+        "equilibrium" => "eq",
+        "time_slice" => "time_sc",
+        "profiles" => "prof"
+    )
+
+    # Apply each abbreviation to the full name
+    for (key, value) in ids_abbreviations
+        full_name = replace(full_name, key => value)
+    end
+    return full_name
+end
+
             end
         end
     end
