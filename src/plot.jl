@@ -2762,11 +2762,11 @@ struct IDS_Field_Finder
     parent_ids::Union{IDS,IDSvector} # Parent IDS of target field
     field::Symbol # Target field symbol
     field_type::Type # Type of the field
-    relative_field_path::String # Relative path from root_ids to the field
+    field_path::String # Relative path from root_ids to the field
 
     # Named constructor with keyword arguments for clear field assignment
-    IDS_Field_Finder(; root_ids, parent_ids, field, field_type, relative_field_path) =
-        new(root_ids, parent_ids, field, field_type, relative_field_path)
+    IDS_Field_Finder(; root_ids, parent_ids, field, field_type, field_path) =
+        new(root_ids, parent_ids, field, field_type, field_path)
 end
 function Base.getproperty(instance::IDS_Field_Finder, prop::Symbol)
     if prop == :value
@@ -2790,6 +2790,9 @@ function Base.show(io::IO, ::MIME"text/plain", IFF::IDS_Field_Finder, flag_stati
     rest_part = replace(parent_name, root_name => "")
 
     printstyled(io, root_name; color=:blue)
+    if IFF.root_ids isa IMASdd.dd
+        print(io, ".")
+    end
     print(io, rest_part * ".")
 
     printstyled(io, String(IFF.field); color=:green, bold=true)
@@ -2837,7 +2840,7 @@ The `find_valid_ids_fields` function recursively extracts valid field informatio
       + `parent_ids::Union{IDS, IDSvector}`: A reference to the parent `ids` object containing the field.
       + `field::Symbol`: The symbol of the field.
       + `field_type::Type`: The type of the field.
-      + `relative_field_path::String`: The relative path from `root_ids` to the field, providing a hierarchical location of the field within the IDS structure.
+      + `field_path::String`: The path from `root_ids` to the field, providing a hierarchical location of the field within the IDS structure.
 
 ## Example
 
@@ -2849,6 +2852,25 @@ IFF = IMAS.find_valid_ids_fields(dd.equilibrium, :psi)
 IFF_list = find_valid_ids_fields([dd.core_profiles, dd.equilibrium], [:q, :volume, :psi_norm])
 ```
 """
+function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symbol,AbstractArray{Symbol},Regex}=r""
+    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
+
+    IFF_arr = Vector{IDS_Field_Finder}()
+
+    for ids in ids_arr
+        if ids isa Union{IDS,IDSvector}
+            root_ids = ids
+            if target_fields isa Union{Symbol, AbstractArray{Symbol}}
+                append!(IFF_arr, find_valid_ids_fields(ids, target_fields; prefix, recursive, root_ids))
+            elseif target_fields isa Regex
+                append!(IFF_arr, find_valid_ids_fields(ids, target_fields))
+            end
+        end
+    end
+
+    return IFF_arr
+end
+
 function find_valid_ids_fields(ids::Union{IDS,IDSvector}, target_fields::Union{Symbol,AbstractArray{Symbol}}=[:all]
     ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
 
@@ -2906,8 +2928,7 @@ function find_valid_ids_fields(ids::Union{IDS,IDSvector}, target_fields::Union{S
                             root_ids=root_ids,
                             field=field,
                             field_type=fieldtype(typeof(ids), field),
-                            relative_field_path=prefix * "." * string(field_name)
-                            # relative_field_path=(prefix == "") ? field_name : prefix * "." * field_name
+                            field_path=location(ids) * "." * string(field_name)
                         )
                     )
                 end
@@ -2930,19 +2951,50 @@ function find_valid_ids_fields(ids::Union{IDS,IDSvector}, target_fields::Union{S
     return IFF_list
 end
 
-function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symbol,AbstractArray{Symbol}}=[:all]
-    ; prefix::String="", recursive::Bool=true, root_ids::Union{IDS,IDSvector,Nothing}=nothing)
+function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target_pattern::Regex)
+    IFF_list = Vector{IDS_Field_Finder}()
 
-    IFF_arr = Vector{IDS_Field_Finder}()
+    stack = Vector{Union{IDS,IDSvector,Vector{IDS}}}()  # Stack initialization
 
-    for ids in ids_arr
-        if ids isa Union{IDS,IDSvector}
-            root_ids = ids
-            append!(IFF_arr, find_valid_ids_fields(ids, target_fields; prefix, recursive, root_ids))
+    push!(stack, root_ids)
+
+    while !isempty(stack)
+        ids = pop!(stack)
+
+        fields = filter(x -> x ∉ IMAS.private_fields, fieldnames(typeof(ids)))
+
+        for field in fields
+            child = getfield(ids, field)
+
+            isempty(child) ? continue : nothing
+
+            if typeof(child) <: Union{IDSvector, Vector{IDS}}
+                for grand_child in child
+                    push!(stack, grand_child)
+                end
+            elseif typeof(child) <: IDS
+                push!(stack, child)
+            else
+                path = IMAS.location(ids)*"."*String(field)
+
+                if occursin(target_pattern, path) && !ismissing(ids, field)
+                    # Save the found result
+                    push!(IFF_list,
+                        IDS_Field_Finder(;
+                        parent_ids=ids,
+                        root_ids=root_ids,
+                        field=field,
+                        field_type=fieldtype(typeof(ids), field),
+                        field_path=path)
+                    )
+                end
+            end
         end
     end
 
-    return IFF_arr
+    # Considering that stack is (Last-In, First-Out),
+    # reverse the IFF_list to make it is in the order of given input
+    return reverse!(IFF_list)
 end
 
 
