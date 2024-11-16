@@ -2946,6 +2946,54 @@ function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symb
 end
 
 
+using Plots.PlotMeasures
+
+@recipe function plot_multiple_fields(ids::Union{IDS,IDSvector}, target_fields::AbstractArray{Symbol}=[:all]; recursive=true, scale_factor=1.0)
+
+    if target_fields == [:all]
+        recursive = true
+    end
+
+    @series begin
+        # find valid field names (with recursive flag)
+        # calls "plot_ids_named_tuple_list" recipe
+        IFF_list = find_valid_ids_fields(ids, target_fields; recursive)
+    end
+end
+
+@recipe function plot_IFF_list(IFF_list::AbstractArray{IDS_Field_Finder}, scale_factor::Real=1.0; ncols=nothing)
+
+    # Keep only non-empty array type data (e.g., scalars are excluded)
+    IFF_list = filter(IFF -> IFF.field_type <: AbstractArray, IFF_list)
+    IFF_list = filter(IFF -> length(IFF.value) > 0, IFF_list)
+
+    # At least one valid filed name is required to proceed
+    @assert length(IFF_list) > 0 "All field names are invalid or missing"
+
+    layout --> length(IFF_list)
+
+    basic_width, basic_height = sqrt(length(IFF_list)) .* (600, 400)
+
+    scaled_width = floor(Int, basic_width * scale_factor)
+    scaled_height = floor(Int, basic_height * scale_factor)
+
+    size --> (scaled_width, scaled_height)
+
+    legend_position --> :best
+    left_margin --> [10mm 10mm]
+    bottom_margin --> 10mm
+
+    # Create subplots for the current group
+    for IFF in IFF_list
+        if IFF.field_type <: Union{AbstractVector,AbstractMatrix}
+            @series begin
+                IFF # (calls "plot_ids_named_tuple" recipe)
+            end
+        end
+    end
+end
+
+
 # Function to shorten names directly in the original text
 function shorten_ids_name(full_name::String)
     # Define abbreviation dictionary
@@ -2962,10 +3010,47 @@ function shorten_ids_name(full_name::String)
     return full_name
 end
 
-            end
+
+@recipe function plot_IFF(IFF::IDS_Field_Finder)
+
+    filed_name = shorten_ids_name(location(IFF.root_ids) * IFF.relative_field_path)
+
+    if IFF.field_type <: AbstractVector && length(IFF.value) > 0
+
+        if length(IFF.value) == 1
+            seriestype --> :scatter
         end
+
+        title --> filed_name
+        IFF.parent_ids, IFF.field # (calls "plot_fields" recipe)
+
+    elseif IFF.field_type <: AbstractMatrix && length(IFF.value) > 0
+        seriestype --> :contourf
+        title --> filed_name
+
+        zvalue = getproperty(IFF.parent_ids, IFF.field)
+
+        if hasfield(typeof(IFF.parent_ids), :grid)
+            grid = getproperty(IFF.parent_ids, :grid)
+            xvalue = grid.dim1
+            yvalue = grid.dim2
+
+            if (length(xvalue) ≠ size(zvalue, 1) || length(yvalue) ≠ size(zvalue, 2))
+                xvalue = 1:size(zvalue, 1)
+                yvalue = 1:size(zvalue, 2)
+            end
+        else
+            xvalue = 1:size(zvalue, 1)
+            yvalue = 1:size(zvalue, 2)
+        end
+
+        xlim --> (minimum(xvalue), maximum(xvalue))
+        ylim --> (minimum(yvalue), maximum(yvalue))
+        aspect_ratio --> :equal
+
+        xvalue, yvalue, zvalue' # (calls Plot's "contourf" recipe)
     end
-    return nt_list
+
 end
 
 
