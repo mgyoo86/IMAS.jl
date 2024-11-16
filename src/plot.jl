@@ -2860,7 +2860,7 @@ function find_valid_ids_fields(ids_arr::AbstractArray, target_fields::Union{Symb
     for ids in ids_arr
         if ids isa Union{IDS,IDSvector}
             root_ids = ids
-            if target_fields isa Union{Symbol, AbstractArray{Symbol}}
+            if target_fields isa Union{Symbol,AbstractArray{Symbol}}
                 append!(IFF_arr, find_valid_ids_fields(ids, target_fields; prefix, recursive, root_ids))
             elseif target_fields isa Regex
                 append!(IFF_arr, find_valid_ids_fields(ids, target_fields))
@@ -2875,13 +2875,13 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
     IFF_list = Vector{IDS_Field_Finder}()
 
     flag_save = false
-    stack = Vector{Union{IDS,IDSvector,Vector{IDS}}}()  # Stack initialization
+    stack = Vector{Tuple{Union{IDS,IDSvector,Vector{IDS}},String}}()  # Stack initialization
     sizehint!(stack, 1000)
 
-    push!(stack, root_ids)
+    push!(stack, (root_ids, location(root_ids)))
 
     while !isempty(stack)
-        ids = pop!(stack)
+        ids, path = pop!(stack)
 
         fields = filter(x -> x ∉ IMAS.private_fields, fieldnames(typeof(ids)))
 
@@ -2890,20 +2890,22 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
 
             isempty(child) ? continue : nothing
 
-            if typeof(child) <: Union{IDSvector, Vector{IDS}}
-                for grand_child in child
-                    push!(stack, grand_child)
+            if typeof(child) <: Union{IDSvector,Vector{IDS}}
+                for (k, grand_child) in pairs(child)
+                    new_path = path * "." * String(field) * "[$k]"
+                    push!(stack, (grand_child, new_path))
                 end
             elseif typeof(child) <: IDS
-                push!(stack, child)
+                new_path = path * "." * String(field)
+                push!(stack, (child, new_path))
             else
-                path = IMAS.location(ids)*"."*String(field)
+                new_path = path * "." * String(field)
 
                 if !ismissing(ids, field)
                     if target isa Regex
-                        flag_save = occursin(target, path) ? true : false
+                        flag_save = occursin(target, new_path) ? true : false
                     elseif target isa Symbol
-                        flag_save = (field==target) ? true : false
+                        flag_save = (field == target) ? true : false
                     elseif target isa AbstractArray{Symbol}
                         flag_save = (field in target) ? true : false
                     end
@@ -2913,11 +2915,11 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
                     # Save the found result
                     push!(IFF_list,
                         IDS_Field_Finder(;
-                        parent_ids=ids,
-                        root_ids=root_ids,
-                        field=field,
-                        field_type=fieldtype(typeof(ids), field),
-                        field_path=path)
+                            parent_ids=ids,
+                            root_ids=root_ids,
+                            field=field,
+                            field_type=fieldtype(typeof(ids), field),
+                            field_path=new_path)
                     )
                     flag_save = false
                 end
@@ -2929,7 +2931,6 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
     # reverse the IFF_list to make it is in the order of given input
     return reverse!(IFF_list)
 end
-
 
 using Plots.PlotMeasures
 
