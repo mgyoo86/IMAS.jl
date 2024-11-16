@@ -2879,33 +2879,29 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
     IFF_list = Vector{IDS_Field_Finder}()
 
     flag_found = false
-    stack = Vector{Tuple{Union{IDS,IDSvector,Vector{IDS}},String}}()  # Stack initialization
+    stack = Vector{Tuple{Union{IDS,IDSvector,Vector{IDS}},String,Bool}}()  # Stack initialization
     sizehint!(stack, 1000)
 
     if root_ids isa IDSvector
         parent_ids = (root_ids._parent).value
-        push!(stack, (parent_ids, location(parent_ids)))
+        push!(stack, (parent_ids, location(parent_ids), false))
     else
-        push!(stack, (root_ids, location(root_ids)))
+        push!(stack, (root_ids, location(root_ids), false))
     end
 
     # helper function
-    function is_valid_target_found(ids::Union{IDS,IDSvector}, field::Symbol, path::String, target::Union{Symbol,AbstractArray{Symbol},Regex})
-        if !ismissing(ids, field)
-            if target isa Regex
-                return occursin(target, path) ? true : false
-            elseif target isa Symbol
-                return (field == target) ? true : false
-            elseif target isa AbstractArray{Symbol}
-                return (field in target) ? true : false
-            end
-        else
-            return false
-        end
+    function is_valid_target_found(ids::Union{IDS, IDSvector}, field::Symbol, path::String, target::Regex)
+        return occursin(target, path)
+    end
+    function is_valid_target_found(ids::Union{IDS, IDSvector}, field::Symbol, path::String, target::Symbol)
+        return field == target
+    end
+    function is_valid_target_found(ids::Union{IDS, IDSvector}, field::Symbol, path::String, target::AbstractArray{Symbol})
+        return field in target
     end
 
     while !isempty(stack)
-        ids, path = pop!(stack)
+        ids, path, parent_found = pop!(stack)
 
         fields = filter(x -> x ∉ IMAS.private_fields, fieldnames(typeof(ids)))
 
@@ -2917,31 +2913,33 @@ function find_valid_ids_fields(root_ids::Union{IDS,IDSvector}, target::Union{Sym
             if typeof(child) <: Union{IDSvector,Vector{IDS}}
                 for (k, grand_child) in pairs(child)
                     new_path = path * "." * String(field) * "[$k]"
-                    flag_found = is_valid_target_found(ids, field, new_path, target)
+                    flag_found = parent_found ? true : is_valid_target_found(ids, field, new_path, target)
                     if include_subfields || !flag_found
-                        push!(stack, (grand_child, new_path))
+                        push!(stack, (grand_child, new_path, flag_found))
                     end
                 end
             elseif typeof(child) <: IDS
                 new_path = path * "." * String(field)
-                flag_found = is_valid_target_found(ids, field, new_path, target)
+                flag_found = parent_found ? true : is_valid_target_found(ids, field, new_path, target)
                 if include_subfields || !flag_found
-                    push!(stack, (child, new_path))
+                    push!(stack, (child, new_path, flag_found))
                 end
             else
                 new_path = path * "." * String(field)
-                flag_found = is_valid_target_found(ids, field, new_path, target)
+                flag_found = parent_found ? true : is_valid_target_found(ids, field, new_path, target)
             end
 
             if flag_found
-                push!(IFF_list,
-                    IDS_Field_Finder(;
-                        parent_ids=ids,
-                        root_ids=root_ids,
-                        field=field,
-                        field_type=fieldtype(typeof(ids), field),
-                        field_path=new_path)
-                )
+                if !ismissing(ids, field)
+                    push!(IFF_list,
+                        IDS_Field_Finder(;
+                            parent_ids=ids,
+                            root_ids=root_ids,
+                            field=field,
+                            field_type=fieldtype(typeof(ids), field),
+                            field_path=new_path)
+                    )
+                end
                 flag_found = false
             end
         end
